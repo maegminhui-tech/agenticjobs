@@ -9,7 +9,7 @@
 
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { deleteCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import {
   approveDeviceCode,
   consumeMagicLink,
@@ -958,9 +958,13 @@ export function pageRoutes(): Hono<AppEnv> {
 
   pages.post('/logout', async (c) => {
     const { pool } = c.get('deps');
-    const cookie = c.req.header('cookie') ?? '';
-    const token = new RegExp(`${SESSION_COOKIE}=([^;]+)`).exec(cookie)?.[1];
-    if (token !== undefined) await revokeSession(pool, decodeURIComponent(token));
+    // The same read the middleware uses, so the two agree on what the cookie
+    // says. A cookie can carry anything, and decoding a malformed escape by
+    // hand threw out of decodeURIComponent as a 500; getCookie leaves what it
+    // cannot decode alone, and a token that matches no session deletes
+    // nothing.
+    const token = getCookie(c, SESSION_COOKIE);
+    if (token !== undefined) await revokeSession(pool, token);
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
     return c.redirect('/', 303);
   });

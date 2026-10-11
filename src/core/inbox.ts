@@ -552,8 +552,12 @@ export async function counterpartyFrom(
   pool: pg.Pool,
   input: { candidate?: string | null; employer?: string | null },
 ): Promise<Counterparty | null> {
-  const candidate = (input.candidate ?? '').trim();
-  const employer = (input.employer ?? '').trim();
+  // Both slugs travel into SQL parameters, and a NUL byte is not text:
+  // PostgreSQL refuses it outright, so a body carrying one answered 500
+  // where every unknown slug answers "nobody here". Drop the byte the way
+  // parseQuery drops it from a search.
+  const candidate = (input.candidate ?? '').replace(/\0/g, '').trim();
+  const employer = (input.employer ?? '').replace(/\0/g, '').trim();
   if (candidate !== '' && employer !== '') return null;
   if (candidate !== '') {
     const result = await pool.query<{ user_id: string }>(

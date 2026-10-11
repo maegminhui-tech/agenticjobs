@@ -83,16 +83,27 @@ export async function getResume(
   userId: string,
   slug: string,
 ): Promise<Resume | null> {
+  // The slug comes from the application body - `"resumeSlug": "\u0000"` on
+  // POST /jobs/:slug/apply answered 500 - and a NUL byte is not text:
+  // PostgreSQL refuses it outright. Drop the byte; nothing matches it anyway.
+  const cleaned = slug.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
   const result = await pool.query<ResumeRow>(`${SELECT} where user_id = $1 and slug = $2`, [
     userId,
-    slug,
+    cleaned,
   ]);
   const row = result.rows[0];
   return row === undefined ? null : toResume(row);
 }
 
 export async function getResumeById(pool: pg.Pool, id: string): Promise<Resume | null> {
-  const result = await pool.query<ResumeRow>(`${SELECT} where id = $1`, [id]);
+  // The id comes from the application body - `"resumeId": "\u0000"` on
+  // POST /jobs/:slug/apply answered 500 - and a NUL byte is not text:
+  // PostgreSQL refuses it outright. Drop the byte; an id that cleans away to
+  // nothing matches nothing.
+  const cleaned = id.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
+  const result = await pool.query<ResumeRow>(`${SELECT} where id = $1`, [cleaned]);
   const row = result.rows[0];
   return row === undefined ? null : toResume(row);
 }
@@ -202,6 +213,12 @@ export async function publicResumeSource(
   pool: pg.Pool,
   publicSlug: string,
 ): Promise<{ name: string; mime: string; bytes: Buffer } | null> {
+  // The slug travels into a SQL parameter, and a NUL byte is not text:
+  // PostgreSQL refuses it outright. Drop the byte the way parseQuery drops it
+  // from a search, and treat a slug that cleans away to nothing as absent
+  // rather than as a lookup for the empty slug.
+  const slug = publicSlug.replace(/\0/g, '').trim();
+  if (slug === '') return null;
   const result = await pool.query<{
     source_name: string | null;
     source_mime: string | null;
@@ -209,7 +226,7 @@ export async function publicResumeSource(
   }>(
     `select source_name, source_mime, source_bytes from resumes
       where public_slug = $1 and visibility in ('link', 'public')`,
-    [publicSlug],
+    [slug],
   );
   const row = result.rows[0];
   if (row === undefined || row.source_bytes === null) return null;
@@ -221,18 +238,27 @@ export async function publicResumeSource(
 }
 
 export async function getPublicResume(pool: pg.Pool, publicSlug: string): Promise<Resume | null> {
+  // Same slug, same NUL byte: `GET /inbox/new?candidate=%00` answered 500
+  // through this lookup, where a slug that matches nothing is the 404 the
+  // page already knows how to give.
+  const slug = publicSlug.replace(/\0/g, '').trim();
+  if (slug === '') return null;
   const result = await pool.query<ResumeRow>(
     `${SELECT} where public_slug = $1 and visibility in ('link', 'public')`,
-    [publicSlug],
+    [slug],
   );
   const row = result.rows[0];
   return row === undefined ? null : toResume(row);
 }
 
 export async function getSharedResume(pool: pg.Pool, id: string): Promise<Resume | null> {
+  // Same body, same NUL byte as getResumeById above: `"resumeId": "\u0000"`
+  // reached this lookup first and answered 500.
+  const cleaned = id.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
   const result = await pool.query<ResumeRow>(
     `${SELECT} where id = $1 and visibility in ('link', 'public')`,
-    [id],
+    [cleaned],
   );
   const row = result.rows[0];
   return row === undefined ? null : toResume(row);

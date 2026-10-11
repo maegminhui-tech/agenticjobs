@@ -237,8 +237,22 @@ export async function boardLinkProblem(
   const sql = section === undefined ? undefined : BOARD_PAGES[section];
   if (sql === undefined || slug === undefined) return null;
 
-  const found = await pool.query(sql, [decodeURIComponent(slug)]);
-  if (found.rows.length > 0) return null;
+  // Two inputs that are not a page here must not answer 500 instead of the
+  // sentence below: a malformed escape, which decodeURIComponent throws on,
+  // and a NUL byte, which PostgreSQL refuses outright. Both clean away to
+  // nothing, and nothing is not a page on this board.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(slug);
+  } catch {
+    decoded = '';
+  }
+  decoded = decoded.replace(/\0/g, '').trim();
+
+  if (decoded !== '') {
+    const found = await pool.query(sql, [decoded]);
+    if (found.rows.length > 0) return null;
+  }
 
   let hint = '';
   if (section === 'candidates' && target.kind === 'candidate') {
@@ -521,8 +535,14 @@ export type Scope =
   | { kind: 'unknown'; slug: string };
 
 export async function scopeFrom(pool: pg.Pool, params: URLSearchParams): Promise<Scope> {
-  const org = (params.get('org') ?? '').trim();
-  const candidate = (params.get('candidate') ?? '').trim();
+  // Both filters travel into SQL parameters, and a NUL byte is not text:
+  // PostgreSQL refuses it outright, so `?org=%00` and `?candidate=%00`
+  // answered 500 on every surface that resolves a scope - the API, the RSS
+  // feed and the Markdown feed at once. Drop the byte the way parseQuery
+  // drops it from a search, and treat a filter that cleans away to nothing
+  // as absent rather than as a lookup for the empty slug.
+  const org = (params.get('org') ?? '').replace(/\0/g, '').trim();
+  const candidate = (params.get('candidate') ?? '').replace(/\0/g, '').trim();
 
   if (org !== '') {
     const row = await pool.query<{ id: string; name: string }>(
@@ -590,12 +610,17 @@ export async function candidateSlugFor(pool: pg.Pool, userId: string): Promise<s
  * rewritten or replaced does not drop their followers.
  */
 export async function userForCandidate(pool: pg.Pool, slug: string): Promise<string | null> {
+  // The slug travels into a SQL parameter, and a NUL byte is not text:
+  // PostgreSQL refuses it outright. The scope parse cleans before calling
+  // this, but the lookup is the boundary that has to hold for every caller.
+  const cleaned = slug.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
   // Matches what /candidates/:slug actually serves, so a page a person can
   // open is a page they can follow.
   const result = await pool.query<{ user_id: string }>(
     `select user_id from resumes
       where public_slug = $1 and visibility in ('link', 'public') limit 1`,
-    [slug],
+    [cleaned],
   );
   return result.rows[0]?.user_id ?? null;
 }

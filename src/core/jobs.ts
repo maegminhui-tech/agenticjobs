@@ -399,11 +399,20 @@ export async function getJobBySlug(
   slug: string,
   options: { includeUnpublished?: boolean } = {},
 ): Promise<Job | null> {
+  // The slug travels into a SQL parameter, and a NUL byte is not text:
+  // PostgreSQL refuses it outright, so `"job": "\u0000"` on POST /inbox
+  // answered 500 where an unknown slug answers "no such job". Drop the byte
+  // the way parseQuery drops it from a search, and treat a slug that cleans
+  // away to nothing as absent rather than as a lookup for the empty slug.
+  const cleaned = slug.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
   const visible =
     options.includeUnpublished === true
       ? ''
       : `and j.status = 'published' and j.published_at is not null and j.published_at <= now() and (j.expires_at is null or j.expires_at > now())`;
-  const result = await pool.query<JobRow>(`${SELECT} where j.slug = $1 ${visible} limit 1`, [slug]);
+  const result = await pool.query<JobRow>(`${SELECT} where j.slug = $1 ${visible} limit 1`, [
+    cleaned,
+  ]);
   const row = result.rows[0];
   return row === undefined ? null : toJob(row);
 }

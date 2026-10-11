@@ -35,7 +35,15 @@ function toOrg(row: OrgRow): Organisation {
 const SELECT = `select id, slug, name, website, logo_url, description, created_at from organisations`;
 
 export async function getOrgBySlug(pool: pg.Pool, slug: string): Promise<Organisation | null> {
-  const result = await pool.query<OrgRow>(`${SELECT} where slug = $1`, [slug]);
+  // The slug travels into a SQL parameter, and a NUL byte is not text:
+  // PostgreSQL refuses it outright, so `"org": "\u0000"` on POST /jobs or
+  // /updates - and `"as": "\u0000"` on POST /inbox - answered 500 where an
+  // unknown slug answers "no such employer". Drop the byte the way parseQuery
+  // drops it from a search, and treat a slug that cleans away to nothing as
+  // absent rather than as a lookup for the empty slug.
+  const cleaned = slug.replace(/\0/g, '').trim();
+  if (cleaned === '') return null;
+  const result = await pool.query<OrgRow>(`${SELECT} where slug = $1`, [cleaned]);
   const row = result.rows[0];
   return row === undefined ? null : toOrg(row);
 }

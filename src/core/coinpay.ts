@@ -418,6 +418,12 @@ export async function finishConnect(
   coinpay: CoinPayClient,
   input: { state: string; code: string; redirectUri: string },
 ): Promise<{ userId: string; redirect: string | null; account: Account } | string> {
+  // The state travels into a SQL parameter, and a NUL byte is not text:
+  // PostgreSQL refuses it outright, so `?state=%00` on
+  // GET /api/v1/coinpay/callback answered 500 where every state that matches
+  // no pending flow answers "expired". Drop the byte; a state that cleans
+  // away to nothing matches nothing.
+  const state = input.state.replace(/\0/g, '').trim();
   const claimed = await pool.query<{
     user_id: string;
     code_verifier: string;
@@ -425,7 +431,7 @@ export async function finishConnect(
   }>(
     `delete from coinpay_oauth_states where state = $1 and expires_at > now()
      returning user_id, code_verifier, redirect`,
-    [input.state],
+    [state],
   );
   const pending = claimed.rows[0];
   if (pending === undefined) return 'That connection attempt has expired. Start again.';
